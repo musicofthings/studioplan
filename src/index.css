@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.sp-root { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+.sp-display { font-family: 'Bricolage Grotesque', 'Inter', sans-serif; letter-spacing: -0.01em; }
+.sp-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+.sp-root * { scrollbar-width: thin; scrollbar-color: #d9d8d2 transparent; }
+body { background: #f6f5f2; margin: 0; }
