@@ -300,9 +300,10 @@ export async function llm(prompt, system, cfg, maxTokens = 4096, signal) {
           { role: "system", content: system },
           { role: "user", content: prompt },
         ],
-        // Keep temperature moderate for packaging quality
-        temperature: 0.7,
       };
+      // Do NOT send temperature here. Newer OpenAI models (e.g. gpt-5.6-terra) only
+      // allow the default (1); sending 0.7 returns 400 Unsupported value.
+      // Providers that support custom temp still use their API default without this field.
       // OpenRouter / OpenAI-compat: only set the configured token field (never both).
       body[p.tokenParam || "max_tokens"] = tokens;
       res = await fetch(endpoint, { method: "POST", signal, headers, body: JSON.stringify(body) });
