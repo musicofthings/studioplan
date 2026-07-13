@@ -14,9 +14,9 @@ StudioPlan is a static React app — there is **no backend**. You paste your own
 |---|---|---|
 | Anthropic (Claude) | `api.anthropic.com` | `claude-sonnet-5`, `claude-opus-4-8` |
 | OpenAI (GPT / Codex) | `api.openai.com` | `gpt-5.5`, `gpt-5.6-terra`, `gpt-4.1` |
-| **Google (Gemini)** | `generativelanguage.googleapis.com` (native `generateContent`) | `gemini-3.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-flash` |
+| **Google (Gemini)** | `generativelanguage.googleapis.com` (native `generateContent`) | `gemini-3.5-flash`, `gemini-3.1-flash-lite`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview` |
 | **xAI (Grok)** | `api.x.ai` | `grok-4.5`, `grok-4.3`, `grok-4.20-0309-reasoning`, `grok-4-1-fast` |
-| OpenRouter (any model) | `openrouter.ai` | `google/gemini-2.5-pro`, `x-ai/grok-4.5`, Claude, GPT, … |
+| OpenRouter (any model) | `openrouter.ai` | `google/gemini-2.5-flash`, `google/gemini-2.5-pro`, `x-ai/grok-4.5`, … — **output capped at 6k tokens/call** (OR reserves credits against `max_tokens`) |
 | Custom (OpenAI-compatible) | your URL | Groq, DeepSeek, Together, Gemini OpenAI-compat, local, … |
 
 Every model field is editable — the presets are just starting points (provider model ids change; if a call fails, verify the id in the provider console).
@@ -87,7 +87,7 @@ Your API key is visible to anyone with access to your browser/device and is used
 
 ### Providers — Gemini + Grok
 
-- **Google Gemini** provider (native `generateContent`) with current models: `gemini-3.5-flash`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`.
+- **Google Gemini** provider (native `generateContent`) with official model codes from [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models): stable `gemini-3.5-flash`, `gemini-3.1-flash-lite`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`; preview `gemini-3.1-pro-preview`, `gemini-3-flash-preview`. Removed shut-down `gemini-2.0-flash`.
 - **xAI Grok** presets updated: `grok-4.5`, `grok-4.3`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning`, `grok-4-1-fast`.
 - **OpenRouter** presets include Gemini + Grok slugs for a CORS-safe fallback.
 - Clearer **401/403** messages (key restrictions, browser CORS) and provider notes pointing to OpenRouter when direct calls fail.

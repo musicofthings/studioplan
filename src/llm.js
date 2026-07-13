@@ -27,16 +27,19 @@ export const PROVIDERS = {
     endpoint: "https://generativelanguage.googleapis.com/v1beta",
     keyHint: "AIza…",
     keyUrl: "https://aistudio.google.com/apikey",
+    // Model codes from https://ai.google.dev/gemini-api/docs/models (text generateContent only).
+    // Stable first, then preview. Image/Live/TTS/Veo models are intentionally omitted.
     models: [
-      "gemini-3.5-flash",
-      "gemini-3-flash-preview",
-      "gemini-2.5-pro",
-      "gemini-2.5-flash",
-      "gemini-2.5-flash-lite",
-      "gemini-2.0-flash",
+      "gemini-3.5-flash", // stable — frontier Flash
+      "gemini-3.1-flash-lite", // stable — cheapest/fastest 3.x
+      "gemini-2.5-pro", // stable — deep reasoning
+      "gemini-2.5-flash", // stable — price/performance
+      "gemini-2.5-flash-lite", // stable — high-volume / low cost
+      "gemini-3.1-pro-preview", // preview — most capable 3.x Pro
+      "gemini-3-flash-preview", // preview — multimodal Flash
     ],
     note:
-      "Uses the native Gemini generateContent API. Create a key in Google AI Studio. If you get 403, open the key → Application restrictions and allow your site origin (e.g. https://musicofthings.github.io/*) or use “None” for local testing. Model ids change — edit the field if a preset 404s.",
+      "Uses native generateContent. Model codes match Google’s docs (ai.google.dev/gemini-api/docs/models). Create a key in AI Studio. 403 → fix Application restrictions (allow your site origin) or set to None for local testing. gemini-2.0-flash is shut down — do not use it.",
   },
   xai: {
     label: "xAI — Grok",
@@ -60,19 +63,29 @@ export const PROVIDERS = {
     endpoint: "https://openrouter.ai/api/v1/chat/completions",
     keyHint: "sk-or-…",
     keyUrl: "https://openrouter.ai/keys",
+    // Always use max_tokens (OpenRouter's primary param). Cap so low-balance keys
+    // don't fail with "requires more credits, or fewer max_tokens" (OR reserves
+    // against the full ceiling even if the model outputs less).
+    tokenParam: "max_tokens",
+    maxOutputCap: 6000,
     models: [
-      "google/gemini-2.5-pro",
       "google/gemini-2.5-flash",
+      "google/gemini-2.5-pro",
       "google/gemini-2.5-flash-lite",
+      "google/gemini-3-flash-preview",
       "x-ai/grok-4.5",
       "x-ai/grok-4.3",
       "x-ai/grok-4-1-fast",
-      "anthropic/claude-sonnet-5",
-      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4",
+      "openai/gpt-4o",
       "deepseek/deepseek-chat",
     ],
-    extraHeaders: () => ({ "HTTP-Referer": window.location.origin, "X-Title": "StudioPlan" }),
-    note: "One key reaches Gemini, Grok, Claude, GPT and 300+ others. Best path when a provider blocks direct browser calls (CORS/403).",
+    extraHeaders: () => ({
+      "HTTP-Referer": typeof window !== "undefined" ? window.location.origin : "https://musicofthings.github.io",
+      "X-Title": "StudioPlan",
+    }),
+    note:
+      "One key for Gemini, Grok, Claude, GPT, etc. OpenRouter reserves credits against max_tokens — StudioPlan caps output at 6k tokens per call to avoid “fewer max_tokens” errors. If you still see that, add credits at openrouter.ai/credits or pick a cheaper model. Edit the model field for any OpenRouter slug.",
   },
   custom: {
     label: "Custom (OpenAI-compatible)",
@@ -85,34 +98,100 @@ export const PROVIDERS = {
   },
 };
 
-function authHint(status, detail) {
-  if (status === 401 || status === 403) {
-    const base =
-      "Rejected (" +
-      status +
-      "). Check the API key in Settings. " +
-      "Common causes: wrong key, key restrictions (HTTP referrer / IP), or the provider blocking browser origins. " +
-      "Workaround: use OpenRouter.";
-    return detail ? base + " Details: " + detail : base;
-  }
-  return null;
+function isBillingOrQuotaError(detail) {
+  if (!detail) return false;
+  return /credit|credits|billing|spending limit|spend limit|quota|insufficient|payment|out of funds|usage limit|monthly limit|rate.?limit|fewer max_tokens|can only afford|requires more credits/i.test(
+    detail
+  );
 }
 
+function isOpenRouterTokenAffordabilityError(detail) {
+  if (!detail) return false;
+  return /fewer max_tokens|can only afford|requires more credits.*max_tokens|max_tokens.*afford/i.test(
+    detail
+  );
+}
+
+/** Clamp requested completion tokens for providers that reserve balance against the ceiling. */
+export function clampMaxTokens(requested, providerCfg) {
+  const n = Math.max(1, Math.floor(Number(requested) || 4096));
+  const cap = providerCfg?.maxOutputCap;
+  if (cap != null && Number.isFinite(cap) && cap > 0) return Math.min(n, cap);
+  return n;
+}
+
+function isAuthOrOriginError(detail) {
+  if (!detail) return true;
+  return /api.?key|unauthorized|forbidden|referer|referrer|origin|cors|invalid.?key|permission|not allowed/i.test(
+    detail
+  );
+}
+
+/**
+ * Build a user-facing error from an HTTP error response.
+ * Prefer provider billing/quota text over a generic 403/CORS message.
+ */
 async function errText(res) {
   // Read the body once — re-reading after res.json() fails is unreliable in browsers.
   const raw = await res.text().catch(() => "");
-  let detail = raw.slice(0, 280);
+  let detail = raw.slice(0, 400);
   try {
     const j = JSON.parse(raw);
-    detail =
-      (j.error && (j.error.message || j.error.status)) ||
-      j.message ||
-      JSON.stringify(j.error || j).slice(0, 240);
+    // OpenAI / xAI / OpenRouter: { error: { message } } or { error: "string" }
+    if (typeof j.error === "string") detail = j.error;
+    else if (j.error && typeof j.error === "object") {
+      detail = j.error.message || j.error.code || JSON.stringify(j.error).slice(0, 300);
+    } else if (j.message) detail = j.message;
+    else detail = JSON.stringify(j).slice(0, 300);
   } catch {
     /* keep raw slice */
   }
-  const auth = authHint(res.status, detail);
-  if (auth) return auth;
+  detail = String(detail || "").trim();
+
+  // OpenRouter: high max_tokens fails when balance can't cover the reserved ceiling
+  if (isOpenRouterTokenAffordabilityError(detail)) {
+    return (
+      "OpenRouter token/credit limit (" +
+      res.status +
+      "): " +
+      detail +
+      " OpenRouter reserves balance for the full max_tokens ceiling. Add credits at openrouter.ai/credits, or use a cheaper model. StudioPlan already caps output per call."
+    );
+  }
+
+  // Billing / credits / spending limits (xAI often returns these as 403)
+  if (isBillingOrQuotaError(detail)) {
+    return (
+      "Provider billing/quota (" +
+      res.status +
+      "): " +
+      detail +
+      " Add credits or raise the spending limit in the provider console, or switch providers in Settings."
+    );
+  }
+
+  // True auth / key / browser-origin issues
+  if ((res.status === 401 || res.status === 403) && isAuthOrOriginError(detail)) {
+    return (
+      "Rejected (" +
+      res.status +
+      "). Check the API key in Settings. " +
+      "Common causes: wrong key, key restrictions (HTTP referrer / IP), or the provider blocking browser origins. " +
+      "Workaround: use OpenRouter." +
+      (detail ? " Details: " + detail : "")
+    );
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return (
+      "Rejected (" +
+      res.status +
+      ")" +
+      (detail ? ": " + detail : ".") +
+      " Check Settings or the provider console."
+    );
+  }
+
   return "Provider error " + res.status + (detail ? ": " + detail : "");
 }
 
@@ -168,6 +247,7 @@ export async function llm(prompt, system, cfg, maxTokens = 4096, signal) {
   if (!cfg.key) throw new Error("Add an API key for " + p.label + " in Settings.");
   const endpoint = cfg.endpoint || p.endpoint;
   if (!endpoint) throw new Error("Set the API endpoint in Settings.");
+  const tokens = clampMaxTokens(maxTokens, p);
 
   let res;
   try {
@@ -183,7 +263,7 @@ export async function llm(prompt, system, cfg, maxTokens = 4096, signal) {
         },
         body: JSON.stringify({
           model: cfg.model,
-          max_tokens: maxTokens,
+          max_tokens: tokens,
           system,
           messages: [{ role: "user", content: prompt }],
         }),
@@ -194,7 +274,7 @@ export async function llm(prompt, system, cfg, maxTokens = 4096, signal) {
       const base = endpoint.replace(/\/$/, "");
       const url = `${base}/models/${encodeURIComponent(cfg.model)}:generateContent`;
       // Thinking models spend output budget on thoughts; give headroom for long scripts.
-      const outTokens = Math.max(maxTokens, 8192);
+      const outTokens = Math.max(tokens, 8192);
       res = await fetch(url, {
         method: "POST",
         signal,
@@ -220,8 +300,11 @@ export async function llm(prompt, system, cfg, maxTokens = 4096, signal) {
           { role: "system", content: system },
           { role: "user", content: prompt },
         ],
+        // Keep temperature moderate for packaging quality
+        temperature: 0.7,
       };
-      body[p.tokenParam || "max_tokens"] = maxTokens;
+      // OpenRouter / OpenAI-compat: only set the configured token field (never both).
+      body[p.tokenParam || "max_tokens"] = tokens;
       res = await fetch(endpoint, { method: "POST", signal, headers, body: JSON.stringify(body) });
     }
   } catch (e) {
@@ -246,5 +329,25 @@ export async function llm(prompt, system, cfg, maxTokens = 4096, signal) {
   if (p.kind === "gemini") {
     return extractGeminiText(data);
   }
-  return extractOpenAIContent(data.choices && data.choices[0] && data.choices[0].message);
+
+  const choice = data.choices && data.choices[0];
+  const text = extractOpenAIContent(choice && choice.message);
+  // OpenRouter / OpenAI finish_reason "length" means we hit max_tokens — surface it
+  // so incomplete blueprints aren't mistaken for parse bugs.
+  if (choice && choice.finish_reason === "length" && text) {
+    // Still return usable text; caller JSON parse may fail on truncated blueprints.
+    // Prefix is avoided so JSON tasks still try to parse. Warn only if clearly non-JSON.
+    if (!/^\s*[\[{]/.test(text)) {
+      return (
+        text +
+        "\n\n[StudioPlan note: output stopped at the token limit. Retry scripts, use a model with higher output, or generate Long alone.]"
+      );
+    }
+  }
+  if (choice && choice.finish_reason === "length" && !text) {
+    throw new Error(
+      "Model hit the max token limit before producing text (often reasoning models). Try google/gemini-2.5-flash or raise credits so a higher ceiling is allowed."
+    );
+  }
+  return text;
 }
