@@ -1,232 +1,21 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
-  Sparkles, Wand2, LayoutGrid, FlaskConical, Wrench, Play, Copy, Check,
-  Download, Plus, Loader2, X, Youtube, Type, FileText, Hash, Image as ImageIcon,
+  Sparkles, Wand2, LayoutGrid, FlaskConical, Wrench, Play, Check,
+  Download, Loader2, X, Youtube, Type, FileText, Hash, Image as ImageIcon,
   Clock, Target, Lightbulb, TrendingUp, MessageSquare, Trophy, ListChecks,
-  RefreshCw, Trash2, Zap, Rocket, Film, Search, PenLine, ChevronRight,
-  Settings as SettingsIcon, KeyRound, ExternalLink, AlertTriangle,
+  Trash2, Zap, Rocket, Film, Search, PenLine, ChevronRight, RefreshCw,
+  Settings as SettingsIcon, KeyRound, ExternalLink, AlertTriangle, Square,
 } from "lucide-react";
 import { llm, PROVIDERS } from "./llm";
-
-/* ------------------------------------------------------------------ */
-/*  Claude (Sonnet) generation helpers                                 */
-/* ------------------------------------------------------------------ */
-
-function parseJSON(text) {
-  let t = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-  try {
-    return JSON.parse(t);
-  } catch {
-    const s = t.indexOf("{");
-    const a = t.indexOf("[");
-    const start = s === -1 ? a : a === -1 ? s : Math.min(s, a);
-    const endObj = t.lastIndexOf("}");
-    const endArr = t.lastIndexOf("]");
-    const end = Math.max(endObj, endArr);
-    if (start !== -1 && end !== -1) return JSON.parse(t.slice(start, end + 1));
-    throw new Error("Could not read a valid result.");
-  }
-}
-
-const STRATEGIST =
-  "You are a world-class YouTube growth strategist and scriptwriter who has packaged and scripted videos for channels past several million subscribers. You have deep command of hooks, audience retention, packaging (title + thumbnail as a pair), YouTube SEO and the current recommendation algorithm. You write specifically for the creator's stated niche, tone and audience. Be concrete, punchy and non-generic. When asked for JSON, return ONLY valid JSON with no markdown fences and no commentary.";
-
-function ctx(f) {
-  return (
-    `Topic / idea: ${f.topic}\n` +
-    `Channel niche: ${f.niche || "general creator"}\n` +
-    `Voice / tone: ${f.tone}\n` +
-    `Target audience: ${f.audience || "broad YouTube audience"}\n` +
-    `Priority keywords: ${f.keywords || "(none specified)"}`
-  );
-}
-
-async function genBlueprint(ask, f) {
-  const prompt =
-    ctx(f) +
-    `\n\nProduce a complete YouTube packaging blueprint. Return ONLY this JSON:\n` +
-    `{\n` +
-    `  "titles": [ {"style":"Curiosity gap","text":"<= 60 chars","score": <1-10 CTR potential>}, {"style":"Big outcome"...}, {"style":"How-to"...}, {"style":"Contrarian"...}, {"style":"Number/list"...} ],\n` +
-    `  "description": "150-280 word SEO description. First two lines must earn the click in search. Include a [links here] and [00:00 timestamps here] placeholder. Keyword rich, natural.",\n` +
-    `  "tags": ["10-15 concise search tags"],\n` +
-    `  "hashtags": ["#3to5", "#relevant"],\n` +
-    `  "thumbnail": {"overlays": ["<=4 words","alt option","alt option"], "visual": "one sentence art direction: subject, expression, colour, composition"},\n` +
-    `  "hooks": ["3 spoken opening hooks, first 5-10 seconds, each a different angle"],\n` +
-    `  "cta": ["2 calls to action tuned to this video"],\n` +
-    `  "postingTime": "best day + time window to publish for this niche/audience, one line with the why",\n` +
-    `  "pinnedComment": "a pinned comment that drives engagement",\n` +
-    `  "chapters": [ {"time":"0:00","title":"Cold open"}, ... 6-9 chapters for the long-form cut ]\n` +
-    `}`;
-  return parseJSON(await ask(prompt, STRATEGIST, 4096));
-}
-
-async function genShort(ask, f) {
-  const prompt =
-    ctx(f) +
-    `\n\nWrite a vertical YouTube SHORT script, 30-55 seconds. Requirements: a 2-second visual + spoken hook that stops the scroll, fast pacing with a pattern interrupt, a subtle loop so it replays, and a clear end CTA. Format in markdown using [0:00] timecodes, spoken lines, and (on-screen: ...) / [b-roll: ...] cue lines. No preamble.`;
-  return ask(prompt, STRATEGIST, 3000);
-}
-
-async function genLong(ask, f, chapters) {
-  const chapStr = (chapters || [])
-    .map((c) => `${c.time} ${c.title}`)
-    .join(" | ");
-  const prompt =
-    ctx(f) +
-    `\n\nChapters to follow: ${chapStr || "(design your own 6-9 chapters)"}\n\n` +
-    `Write a full long-form YouTube script (~6-9 minutes). Include: a cold-open hook (0-15s) that states the promise, an intro that builds why-watch + credibility, the chaptered body, an open loop / re-hook roughly every 60-90 seconds to hold retention, [VISUAL:] and [B-ROLL:] cue lines, and an outro with the CTA plus a tease to the next video. Use markdown with ## chapter headers and timecodes. Write real spoken lines, not an outline.`;
-  return ask(prompt, STRATEGIST, 8000);
-}
-
-async function genIdeas(ask, niche, count) {
-  const prompt =
-    `Channel niche: ${niche}\n\nGenerate ${count} high-potential YouTube video ideas for this niche. Mix searchable "how-to" ideas with a few bold browse/viral swings. Return ONLY JSON: [ {"title":"working title","angle":"one line on why it works / the hook","format":"long" or "short"} ]`;
-  return parseJSON(await ask(prompt, STRATEGIST, 2000));
-}
-
-async function genToolkit(ask, niche) {
-  const prompt =
-    `Channel niche: ${niche}\n\nReturn ONLY JSON with fields:\n{\n "hashtags": ["12-16 relevant hashtags"],\n "seoKeywords": ["12-16 search keywords/phrases people actually type"],\n "relatedSearches": ["8 adjacent search queries to make videos about"],\n "contentPillars": [ {"name":"pillar","description":"what it covers and why it retains this audience"} x4-5 ]\n}`;
-  return parseJSON(await ask(prompt, STRATEGIST, 2000));
-}
-
-/* ------------------------------------------------------------------ */
-/*  Small utilities                                                    */
-/* ------------------------------------------------------------------ */
-
-function copyText(text) {
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText)
-      return navigator.clipboard.writeText(text);
-  } catch {}
-  const ta = document.createElement("textarea");
-  ta.value = text;
-  ta.style.position = "fixed";
-  ta.style.opacity = "0";
-  document.body.appendChild(ta);
-  ta.select();
-  try { document.execCommand("copy"); } catch {}
-  document.body.removeChild(ta);
-  return Promise.resolve();
-}
-
-function download(name, text, type = "text/markdown") {
-  const blob = new Blob([text], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-function erf(x) {
-  const s = x < 0 ? -1 : 1;
-  x = Math.abs(x);
-  const t = 1 / (1 + 0.3275911 * x);
-  const y =
-    1 -
-    ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t +
-      0.254829592) *
-      t *
-      Math.exp(-x * x);
-  return s * y;
-}
-const normCdf = (x) => 0.5 * (1 + erf(x / Math.SQRT2));
-
-function videoToMarkdown(v) {
-  let m = `# ${v.topic}\n\n`;
-  m += `**Niche:** ${v.niche || "—"}  |  **Tone:** ${v.tone}  |  **Status:** ${v.status}\n\n`;
-  if (v.titles) {
-    m += `## Title options (A/B)\n`;
-    v.titles.forEach((t) => (m += `- **[${t.style} · ${t.score}/10]** ${t.text}\n`));
-    m += `\n`;
-  }
-  if (v.thumbnail) {
-    m += `## Thumbnail\n- Overlay text: ${v.thumbnail.overlays.join(" / ")}\n- Direction: ${v.thumbnail.visual}\n\n`;
-  }
-  if (v.hooks) m += `## Hooks\n${v.hooks.map((h) => `- ${h}`).join("\n")}\n\n`;
-  if (v.description) m += `## Description\n${v.description}\n\n`;
-  if (v.tags) m += `## Tags\n${v.tags.join(", ")}\n\n`;
-  if (v.hashtags) m += `## Hashtags\n${v.hashtags.join(" ")}\n\n`;
-  if (v.cta) m += `## CTAs\n${v.cta.map((c) => `- ${c}`).join("\n")}\n\n`;
-  if (v.postingTime) m += `## Publish window\n${v.postingTime}\n\n`;
-  if (v.pinnedComment) m += `## Pinned comment\n${v.pinnedComment}\n\n`;
-  if (v.shortScript) m += `## Short script\n${v.shortScript}\n\n`;
-  if (v.longScript) m += `## Long-form script\n${v.longScript}\n\n`;
-  return m;
-}
-
-const STATUSES = ["Idea", "Scripted", "Filming", "Scheduled", "Published"];
-const STATUS_COLOR = {
-  Idea: "#8b8b95",
-  Scripted: "#4234c7",
-  Filming: "#f2a413",
-  Scheduled: "#0d8a6a",
-  Published: "#e5342b",
-};
-const TONES = [
-  "Energetic & punchy",
-  "Calm & authoritative",
-  "Curious & nerdy",
-  "Warm & conversational",
-  "Bold & contrarian",
-  "Cinematic & dramatic",
-];
-
-/* ------------------------------------------------------------------ */
-/*  Reusable UI primitives                                             */
-/* ------------------------------------------------------------------ */
-
-function CopyBtn({ text, label = "Copy", small }) {
-  const [done, setDone] = useState(false);
-  return (
-    <button
-      onClick={async () => {
-        await copyText(text);
-        setDone(true);
-        setTimeout(() => setDone(false), 1200);
-      }}
-      className={
-        "inline-flex items-center gap-1.5 rounded-lg border border-[#e7e6e1] bg-white text-[#3a3a44] hover:border-[#c9c8c2] hover:text-[#17171c] transition " +
-        (small ? "px-2 py-1 text-xs" : "px-3 py-1.5 text-sm")
-      }
-    >
-      {done ? <Check size={13} className="text-[#0d8a6a]" /> : <Copy size={13} />}
-      {done ? "Copied" : label}
-    </button>
-  );
-}
-
-function Section({ icon: Icon, title, right, children }) {
-  return (
-    <div className="rounded-2xl border border-[#e7e6e1] bg-white">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#f0efea]">
-        <div className="flex items-center gap-2 text-[#17171c]">
-          <Icon size={16} className="text-[#e5342b]" />
-          <span className="sp-display text-[15px] font-semibold tracking-tight">{title}</span>
-        </div>
-        {right}
-      </div>
-      <div className="p-4">{children}</div>
-    </div>
-  );
-}
-
-function Chip({ children, tone = "ink" }) {
-  const map = {
-    ink: "bg-[#f4f4f2] text-[#3a3a44] border-[#e7e6e1]",
-    red: "bg-[#fdeceb] text-[#c02a20] border-[#f6d3cf]",
-    indigo: "bg-[#eeecfb] text-[#3a2fb5] border-[#dcd8f6]",
-  };
-  return (
-    <span className={"sp-mono inline-block rounded-md border px-2 py-0.5 text-[11px] " + map[tone]}>
-      {children}
-    </span>
-  );
-}
+import { genBlueprint, genShort, genLong, genIdeas, genToolkit } from "./lib/generate";
+import { twoProportionZTest } from "./lib/stats";
+import { download, videoToMarkdown, slugifyFilename } from "./lib/utils";
+import {
+  STATUSES, STATUS_COLOR, TONES, THUMB_CRITERIA, DESC_TEMPLATE, CTAS,
+} from "./lib/constants";
+import {
+  CopyBtn, Section, Chip, TitleCarousel, Skeleton, ScriptLoading,
+} from "./components/ui";
 
 /* ------------------------------------------------------------------ */
 /*  Main app                                                           */
@@ -238,7 +27,7 @@ export default function StudioPlan() {
     try {
       const v = JSON.parse(localStorage.getItem("studioplan.videos"));
       if (Array.isArray(v)) return v;
-    } catch {}
+    } catch { /* ignore */ }
     return [];
   });
   const [drawerId, setDrawerId] = useState(null);
@@ -247,20 +36,38 @@ export default function StudioPlan() {
     try {
       const s = JSON.parse(localStorage.getItem("studioplan.settings"));
       if (s && s.provider) return { keys: {}, endpoint: "", ...s };
-    } catch {}
+    } catch { /* ignore */ }
     return { provider: "anthropic", model: PROVIDERS.anthropic.models[0], endpoint: "", keys: {} };
   });
+
   useEffect(() => {
-    try { localStorage.setItem("studioplan.videos", JSON.stringify(videos)); } catch {}
+    try { localStorage.setItem("studioplan.videos", JSON.stringify(videos)); } catch { /* quota */ }
   }, [videos]);
   useEffect(() => {
-    try { localStorage.setItem("studioplan.settings", JSON.stringify(settings)); } catch {}
+    try { localStorage.setItem("studioplan.settings", JSON.stringify(settings)); } catch { /* quota */ }
   }, [settings]);
 
   const activeKey = settings.keys[settings.provider] || "";
   const hasKey = !!activeKey && (settings.provider !== "custom" || !!settings.endpoint);
-  const ask = (prompt, system, maxTokens) =>
-    llm(prompt, system, { provider: settings.provider, key: activeKey, model: settings.model, endpoint: settings.endpoint }, maxTokens);
+
+  const abortRef = useRef(null);
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
+
+  const makeAsk = useCallback((signal) => {
+    return (prompt, system, maxTokens) =>
+      llm(
+        prompt,
+        system,
+        {
+          provider: settings.provider,
+          key: activeKey,
+          model: settings.model,
+          endpoint: settings.endpoint,
+        },
+        maxTokens,
+        signal
+      );
+  }, [settings.provider, settings.model, settings.endpoint, activeKey]);
 
   const [form, setForm] = useState({
     topic: "",
@@ -272,10 +79,34 @@ export default function StudioPlan() {
   });
   const up = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const [gen, setGen] = useState({ loading: false, step: "", error: "", id: null });
+  // gen.canRetryScripts: true when packaging exists but scripts failed / incomplete
+  const [gen, setGen] = useState({
+    loading: false,
+    step: "",
+    error: "",
+    id: null,
+    canRetryScripts: false,
+  });
 
   const updateVideo = (id, patch) =>
     setVideos((vs) => vs.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+
+  function cancelGenerate() {
+    abortRef.current?.abort();
+  }
+
+  async function runScripts(ask, f, id, bp) {
+    if (f.format === "long" || f.format === "both") {
+      setGen((g) => ({ ...g, step: "Writing the long-form script…" }));
+      const long = await genLong(ask, f, bp.chapters);
+      updateVideo(id, { longScript: long });
+    }
+    if (f.format === "short" || f.format === "both") {
+      setGen((g) => ({ ...g, step: "Writing the Short script…" }));
+      const short = await genShort(ask, f);
+      updateVideo(id, { shortScript: short });
+    }
+  }
 
   async function handleGenerate(override) {
     const f = override ? { ...form, ...override } : form;
@@ -289,8 +120,15 @@ export default function StudioPlan() {
       return;
     }
     if (override) setForm((s) => ({ ...s, ...override }));
+
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    const ask = makeAsk(ac.signal);
+
     const id = Date.now() + "-" + Math.random().toString(36).slice(2, 6);
-    setGen({ loading: true, step: "Packaging titles, description & SEO…", error: "", id });
+    setGen({ loading: true, step: "Packaging titles, description & SEO…", error: "", id: null, canRetryScripts: false });
+    let savedId = null;
     try {
       const bp = await genBlueprint(ask, f);
       const base = {
@@ -298,6 +136,8 @@ export default function StudioPlan() {
         topic: f.topic,
         niche: f.niche,
         tone: f.tone,
+        audience: f.audience,
+        keywords: f.keywords,
         format: f.format,
         status: "Scripted",
         scheduledDate: "",
@@ -307,21 +147,81 @@ export default function StudioPlan() {
         longScript: "",
       };
       setVideos((vs) => [base, ...vs]);
+      savedId = id;
+      setGen((g) => ({ ...g, id }));
 
-      if (f.format === "long" || f.format === "both") {
-        setGen((g) => ({ ...g, step: "Writing the long-form script…" }));
-        const long = await genLong(ask, f, bp.chapters);
-        updateVideo(id, { longScript: long });
-      }
-      if (f.format === "short" || f.format === "both") {
-        setGen((g) => ({ ...g, step: "Writing the Short script…" }));
-        const short = await genShort(ask, f);
-        updateVideo(id, { shortScript: short });
-      }
-      setGen({ loading: false, step: "", error: "", id });
+      await runScripts(ask, f, id, bp);
+      setGen({ loading: false, step: "", error: "", id, canRetryScripts: false });
     } catch (e) {
-      setGen({ loading: false, step: "", error: e.message || "Something went wrong. Try again.", id: null });
+      if (e?.name === "AbortError") {
+        setGen({
+          loading: false,
+          step: "",
+          error: "Generation cancelled.",
+          id: savedId,
+          canRetryScripts: !!savedId,
+        });
+        return;
+      }
+      // Keep id when packaging was saved so the partial blueprint stays visible.
+      setGen({
+        loading: false,
+        step: "",
+        error: e.message || "Something went wrong. Try again.",
+        id: savedId,
+        canRetryScripts: !!savedId,
+      });
     }
+  }
+
+  async function handleRetryScripts() {
+    const video = videos.find((v) => v.id === gen.id);
+    if (!video || !hasKey) {
+      if (!hasKey) setShowSettings(true);
+      return;
+    }
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    const ask = makeAsk(ac.signal);
+    const f = {
+      topic: video.topic,
+      niche: video.niche,
+      tone: video.tone,
+      audience: video.audience || form.audience,
+      keywords: video.keywords || form.keywords,
+      format: video.format || "both",
+    };
+    setGen((g) => ({
+      ...g,
+      loading: true,
+      step: "Retrying scripts…",
+      error: "",
+      canRetryScripts: false,
+    }));
+    try {
+      await runScripts(ask, f, video.id, video);
+      setGen({ loading: false, step: "", error: "", id: video.id, canRetryScripts: false });
+    } catch (e) {
+      if (e?.name === "AbortError") {
+        setGen({ loading: false, step: "", error: "Generation cancelled.", id: video.id, canRetryScripts: true });
+        return;
+      }
+      setGen({
+        loading: false,
+        step: "",
+        error: e.message || "Script retry failed.",
+        id: video.id,
+        canRetryScripts: true,
+      });
+    }
+  }
+
+  function deleteVideo(id) {
+    if (!window.confirm("Delete this video blueprint? This cannot be undone.")) return;
+    setVideos((vs) => vs.filter((x) => x.id !== id));
+    if (drawerId === id) setDrawerId(null);
+    if (gen.id === id) setGen((g) => ({ ...g, id: null, canRetryScripts: false }));
   }
 
   const currentVideo = videos.find((v) => v.id === gen.id) || null;
@@ -340,7 +240,6 @@ export default function StudioPlan() {
       "w-full rounded-xl border border-[#e7e6e1] bg-white px-3.5 py-2.5 text-sm text-[#17171c] placeholder-[#a3a3ac] outline-none focus:border-[#e5342b] focus:ring-2 focus:ring-[#fdeceb] transition";
     return (
       <div className="grid gap-5 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-        {/* input */}
         <div className="space-y-4">
           <Section icon={Sparkles} title="New video">
             <div className="space-y-3">
@@ -401,6 +300,7 @@ export default function StudioPlan() {
                   ].map((o) => (
                     <button
                       key={o.id}
+                      type="button"
                       onClick={() => up("format", o.id)}
                       className={
                         "flex items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-medium transition " +
@@ -414,15 +314,42 @@ export default function StudioPlan() {
                   ))}
                 </div>
               </div>
-              <button
-                onClick={() => handleGenerate()}
-                disabled={gen.loading}
-                className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl bg-[#e5342b] px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#c92a22] disabled:opacity-60"
-              >
-                {gen.loading ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
-                {gen.loading ? "Generating…" : "Generate blueprint"}
-              </button>
-              {gen.error && <p className="text-sm text-[#c02a20]">{gen.error}</p>}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleGenerate()}
+                  disabled={gen.loading}
+                  className="mt-1 flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#e5342b] px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#c92a22] disabled:opacity-60"
+                >
+                  {gen.loading ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                  {gen.loading ? "Generating…" : "Generate blueprint"}
+                </button>
+                {gen.loading && (
+                  <button
+                    type="button"
+                    onClick={cancelGenerate}
+                    className="mt-1 inline-flex items-center gap-1.5 rounded-xl border border-[#e7e6e1] bg-white px-3 py-3 text-sm font-medium text-[#3a3a44] hover:border-[#c9c8c2]"
+                    title="Cancel"
+                  >
+                    <Square size={14} /> Stop
+                  </button>
+                )}
+              </div>
+              {gen.error && (
+                <div className="space-y-2">
+                  <p className="text-sm text-[#c02a20]">{gen.error}</p>
+                  {gen.canRetryScripts && gen.id && (
+                    <button
+                      type="button"
+                      onClick={handleRetryScripts}
+                      disabled={gen.loading}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#f6d3cf] bg-[#fdeceb] px-3 py-1.5 text-xs font-medium text-[#c02a20] hover:bg-[#fbdedb]"
+                    >
+                      <RefreshCw size={12} /> Retry scripts only
+                    </button>
+                  )}
+                </div>
+              )}
               {gen.loading && (
                 <p className="flex items-center gap-2 text-xs text-[#6b6b76]">
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#e5342b]" />
@@ -433,7 +360,6 @@ export default function StudioPlan() {
           </Section>
         </div>
 
-        {/* output */}
         <div>
           {currentVideo ? (
             renderBlueprint(currentVideo, (p) => updateVideo(currentVideo.id, p), gen.loading, gen.step)
@@ -444,7 +370,7 @@ export default function StudioPlan() {
               </div>
               <p className="sp-display text-lg font-semibold text-[#17171c]">Your blueprint lands here</p>
               <p className="mt-1 max-w-sm text-sm text-[#6b6b76]">
-                Describe a video on the left. You'll get 5 A/B titles, a thumbnail concept, an SEO
+                Describe a video on the left. You&apos;ll get 5 A/B titles, a thumbnail concept, an SEO
                 description, hooks, tags, and full short + long scripts — all editable and saved to
                 your masterplan.
               </p>
@@ -457,9 +383,11 @@ export default function StudioPlan() {
 
   /* ------------------------------ Blueprint detail ------------------------------ */
   function renderBlueprint(v, onUpdate, loading, step) {
+    const overlay0 = v.thumbnail?.overlays?.[0];
+    const primaryTitle = v.titles?.[0]?.text || v.topic;
+
     return (
       <div className="space-y-5">
-        {/* signature card */}
         <div className="overflow-hidden rounded-2xl border border-[#e7e6e1] bg-white">
           <div className="relative bg-gradient-to-br from-[#17171c] to-[#2a2340] p-5">
             <div className="flex items-start justify-between gap-4">
@@ -475,29 +403,27 @@ export default function StudioPlan() {
                 <TitleCarousel titles={v.titles} />
               </div>
             </div>
-            {/* faux thumbnail preview */}
             <div className="mt-4 flex items-center gap-3">
               <div className="relative flex h-[72px] w-[128px] shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-[#e5342b] to-[#7a1f8f]">
                 <span className="sp-display px-2 text-center text-[13px] font-extrabold uppercase leading-tight text-white drop-shadow">
-                  {v.thumbnail ? v.thumbnail.overlays[0] : "…"}
+                  {overlay0 || "…"}
                 </span>
                 <Play size={14} className="absolute bottom-1 right-1 text-white/80" fill="white" />
               </div>
               <div className="min-w-0 text-white/70">
                 <p className="text-[11px] uppercase tracking-wide text-white/40">Thumbnail direction</p>
                 <p className="line-clamp-2 text-xs text-white/80">
-                  {v.thumbnail ? v.thumbnail.visual : "Generating…"}
+                  {v.thumbnail?.visual || "Generating…"}
                 </p>
               </div>
             </div>
           </div>
 
-          {/* status + actions bar */}
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
             <div className="flex items-center gap-2">
               <span
                 className="h-2 w-2 rounded-full"
-                style={{ background: STATUS_COLOR[v.status] }}
+                style={{ background: STATUS_COLOR[v.status] || STATUS_COLOR.Idea }}
               />
               <select
                 value={v.status}
@@ -510,7 +436,7 @@ export default function StudioPlan() {
               </select>
               <input
                 type="date"
-                value={v.scheduledDate}
+                value={v.scheduledDate || ""}
                 onChange={(e) => onUpdate({ scheduledDate: e.target.value })}
                 className="rounded-lg border border-[#e7e6e1] bg-white px-2 py-1 text-xs text-[#3a3a44] outline-none"
               />
@@ -518,7 +444,8 @@ export default function StudioPlan() {
             <div className="flex items-center gap-2">
               <CopyBtn text={videoToMarkdown(v)} label="Copy all" small />
               <button
-                onClick={() => download(v.topic.slice(0, 40).replace(/\W+/g, "-") + ".md", videoToMarkdown(v))}
+                type="button"
+                onClick={() => download(slugifyFilename(v.topic) + ".md", videoToMarkdown(v))}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-[#e7e6e1] bg-white px-2 py-1 text-xs text-[#3a3a44] hover:border-[#c9c8c2]"
               >
                 <Download size={13} /> .md
@@ -527,10 +454,13 @@ export default function StudioPlan() {
           </div>
         </div>
 
-        {/* titles A/B */}
-        <Section icon={Type} title="Titles — A/B ready" right={v.titles && <Chip tone="indigo">{v.titles.length} variants</Chip>}>
+        <Section
+          icon={Type}
+          title="Titles — A/B ready"
+          right={v.titles?.length > 0 && <Chip tone="indigo">{v.titles.length} variants</Chip>}
+        >
           <div className="space-y-2">
-            {v.titles ? (
+            {v.titles?.length ? (
               v.titles.map((t, i) => (
                 <div key={i} className="flex items-center gap-3 rounded-xl border border-[#f0efea] px-3 py-2">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#eeecfb] sp-mono text-sm font-bold text-[#3a2fb5]">
@@ -549,25 +479,27 @@ export default function StudioPlan() {
           </div>
         </Section>
 
-        {/* thumbnail + hooks */}
         <div className="grid gap-5 md:grid-cols-2">
           <Section icon={ImageIcon} title="Thumbnail overlays">
             {v.thumbnail ? (
               <div className="space-y-2">
-                {v.thumbnail.overlays.map((o, i) => (
+                {(v.thumbnail.overlays || []).map((o, i) => (
                   <div key={i} className="flex items-center justify-between rounded-lg bg-[#f4f4f2] px-3 py-2">
                     <span className="sp-display text-sm font-bold uppercase text-[#17171c]">{o}</span>
                     <CopyBtn text={o} small label="" />
                   </div>
                 ))}
-                <p className="pt-1 text-xs text-[#6b6b76]">{v.thumbnail.visual}</p>
+                {!v.thumbnail.overlays?.length && (
+                  <p className="text-xs text-[#8b8b95]">No overlay text returned.</p>
+                )}
+                <p className="pt-1 text-xs text-[#6b6b76]">{v.thumbnail.visual || primaryTitle}</p>
               </div>
             ) : (
               <Skeleton rows={3} />
             )}
           </Section>
           <Section icon={Zap} title="Opening hooks">
-            {v.hooks ? (
+            {v.hooks?.length ? (
               <ul className="space-y-2">
                 {v.hooks.map((h, i) => (
                   <li key={i} className="flex items-start gap-2 rounded-lg border border-[#f0efea] px-3 py-2 text-sm text-[#3a3a44]">
@@ -583,7 +515,6 @@ export default function StudioPlan() {
           </Section>
         </div>
 
-        {/* description */}
         <Section
           icon={FileText}
           title="Description (SEO)"
@@ -596,18 +527,21 @@ export default function StudioPlan() {
           )}
         </Section>
 
-        {/* tags / hashtags / meta */}
         <div className="grid gap-5 md:grid-cols-2">
-          <Section icon={Hash} title="Tags & hashtags" right={v.tags && <CopyBtn text={v.tags.join(", ")} small label="Tags" />}>
-            {v.tags ? (
+          <Section
+            icon={Hash}
+            title="Tags & hashtags"
+            right={v.tags?.length > 0 && <CopyBtn text={v.tags.join(", ")} small label="Tags" />}
+          >
+            {v.tags || v.hashtags ? (
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-1.5">
-                  {v.tags.map((t, i) => (
+                  {(v.tags || []).map((t, i) => (
                     <Chip key={i}>{t}</Chip>
                   ))}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {v.hashtags.map((t, i) => (
+                  {(v.hashtags || []).map((t, i) => (
                     <Chip key={i} tone="red">{t}</Chip>
                   ))}
                 </div>
@@ -617,25 +551,31 @@ export default function StudioPlan() {
             )}
           </Section>
           <Section icon={Target} title="Publish & engage">
-            {v.cta ? (
+            {v.cta?.length || v.postingTime || v.pinnedComment ? (
               <div className="space-y-3 text-sm">
-                <div>
-                  <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#6b6b76]"><Clock size={12} /> Best window</p>
-                  <p className="text-[#3a3a44]">{v.postingTime}</p>
-                </div>
-                <div>
-                  <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#6b6b76]"><TrendingUp size={12} /> CTAs</p>
-                  {v.cta.map((c, i) => (
-                    <p key={i} className="text-[#3a3a44]">• {c}</p>
-                  ))}
-                </div>
-                <div>
-                  <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#6b6b76]"><MessageSquare size={12} /> Pinned comment</p>
-                  <div className="flex items-start gap-2">
-                    <p className="flex-1 text-[#3a3a44]">{v.pinnedComment}</p>
-                    <CopyBtn text={v.pinnedComment} small label="" />
+                {v.postingTime && (
+                  <div>
+                    <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#6b6b76]"><Clock size={12} /> Best window</p>
+                    <p className="text-[#3a3a44]">{v.postingTime}</p>
                   </div>
-                </div>
+                )}
+                {v.cta?.length > 0 && (
+                  <div>
+                    <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#6b6b76]"><TrendingUp size={12} /> CTAs</p>
+                    {v.cta.map((c, i) => (
+                      <p key={i} className="text-[#3a3a44]">• {c}</p>
+                    ))}
+                  </div>
+                )}
+                {v.pinnedComment && (
+                  <div>
+                    <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#6b6b76]"><MessageSquare size={12} /> Pinned comment</p>
+                    <div className="flex items-start gap-2">
+                      <p className="flex-1 text-[#3a3a44]">{v.pinnedComment}</p>
+                      <CopyBtn text={v.pinnedComment} small label="" />
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <Skeleton rows={4} />
@@ -643,7 +583,6 @@ export default function StudioPlan() {
           </Section>
         </div>
 
-        {/* scripts */}
         {(v.format === "short" || v.format === "both") && (
           <Section
             icon={Zap}
@@ -691,11 +630,18 @@ export default function StudioPlan() {
       setIdeas((s) => ({ ...s, error: "Add your API key in Settings first." }));
       return;
     }
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
     setIdeas((s) => ({ ...s, loading: true, error: "", list: [] }));
     try {
-      const list = await genIdeas(ask, ideas.niche, ideas.count);
+      const list = await genIdeas(makeAsk(ac.signal), ideas.niche, ideas.count);
       setIdeas((s) => ({ ...s, loading: false, list }));
     } catch (e) {
+      if (e?.name === "AbortError") {
+        setIdeas((s) => ({ ...s, loading: false, error: "Cancelled." }));
+        return;
+      }
       setIdeas((s) => ({ ...s, loading: false, error: e.message }));
     }
   }
@@ -728,6 +674,7 @@ export default function StudioPlan() {
               className="flex-1 rounded-xl border border-[#e7e6e1] bg-white px-3.5 py-2.5 text-sm outline-none focus:border-[#e5342b] focus:ring-2 focus:ring-[#fdeceb]"
             />
             <button
+              type="button"
               onClick={runIdeas}
               disabled={ideas.loading}
               className="flex items-center justify-center gap-2 rounded-xl bg-[#17171c] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#000] disabled:opacity-60"
@@ -747,6 +694,7 @@ export default function StudioPlan() {
                   </div>
                   <p className="text-xs text-[#6b6b76]">{it.angle}</p>
                   <button
+                    type="button"
                     onClick={() => {
                       setTab("generate");
                       handleGenerate({ topic: it.title, niche: ideas.niche, format: it.format === "short" ? "short" : "both" });
@@ -768,12 +716,14 @@ export default function StudioPlan() {
             videos.length > 0 && (
               <div className="flex gap-2">
                 <button
+                  type="button"
                   onClick={() => download("masterplan.md", videos.map(videoToMarkdown).join("\n---\n\n"))}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-[#e7e6e1] bg-white px-2.5 py-1 text-xs text-[#3a3a44] hover:border-[#c9c8c2]"
                 >
                   <Download size={13} /> Export all
                 </button>
                 <button
+                  type="button"
                   onClick={() => download("masterplan.json", JSON.stringify(videos, null, 2), "application/json")}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-[#e7e6e1] bg-white px-2.5 py-1 text-xs text-[#3a3a44] hover:border-[#c9c8c2]"
                 >
@@ -794,19 +744,21 @@ export default function StudioPlan() {
                   <div className="mb-2 flex items-center justify-between">
                     <span
                       className="sp-mono rounded-md px-2 py-0.5 text-[10px] font-medium text-white"
-                      style={{ background: STATUS_COLOR[v.status] }}
+                      style={{ background: STATUS_COLOR[v.status] || STATUS_COLOR.Idea }}
                     >
                       {v.status}
                     </span>
                     <button
-                      onClick={() => setVideos((vs) => vs.filter((x) => x.id !== v.id))}
+                      type="button"
+                      onClick={() => deleteVideo(v.id)}
                       className="text-[#c9c8c2] opacity-0 transition group-hover:opacity-100 hover:text-[#e5342b]"
+                      aria-label="Delete video"
                     >
                       <Trash2 size={14} />
                     </button>
                   </div>
                   <p className="line-clamp-2 flex-1 text-sm font-medium text-[#17171c]">
-                    {v.titles ? v.titles[0].text : v.topic}
+                    {v.titles?.[0]?.text || v.topic}
                   </p>
                   <p className="mt-1 line-clamp-1 text-[11px] text-[#8b8b95]">{v.niche || "—"}</p>
                   <div className="mt-2 flex items-center justify-between">
@@ -815,6 +767,7 @@ export default function StudioPlan() {
                       {(v.format === "long" || v.format === "both") && <Chip tone="indigo">long</Chip>}
                     </div>
                     <button
+                      type="button"
                       onClick={() => setDrawerId(v.id)}
                       className="inline-flex items-center gap-1 text-xs font-medium text-[#e5342b] hover:underline"
                     >
@@ -836,26 +789,17 @@ export default function StudioPlan() {
     a: [false, false, false, false, false],
     b: [false, false, false, false, false],
   });
-  const CRIT = [
-    "One clear focal subject",
-    "Readable text (≤4 words)",
-    "High colour contrast",
-    "Emotion / curiosity on face",
-    "Reads at small size (mobile)",
-  ];
 
-  const abResult = useMemo(() => {
-    const i1 = +ab.aImp, c1 = +ab.aClk, i2 = +ab.bImp, c2 = +ab.bClk;
-    if (!(i1 > 0 && i2 > 0 && c1 >= 0 && c2 >= 0 && c1 <= i1 && c2 <= i2)) return null;
-    const p1 = c1 / i1, p2 = c2 / i2;
-    const pool = (c1 + c2) / (i1 + i2);
-    const se = Math.sqrt(pool * (1 - pool) * (1 / i1 + 1 / i2));
-    const z = se === 0 ? 0 : (p1 - p2) / se;
-    const pval = 2 * (1 - normCdf(Math.abs(z)));
-    const winner = p1 === p2 ? "Tie" : p1 > p2 ? "A" : "B";
-    const lift = p1 === 0 || p2 === 0 ? null : ((Math.max(p1, p2) / Math.min(p1, p2) - 1) * 100);
-    return { p1, p2, pval, winner, lift, sig: pval < 0.05, conf: (1 - pval) * 100 };
-  }, [ab]);
+  const abResult = useMemo(
+    () =>
+      twoProportionZTest({
+        aImp: ab.aImp,
+        aClk: ab.aClk,
+        bImp: ab.bImp,
+        bClk: ab.bClk,
+      }),
+    [ab]
+  );
 
   function renderAB() {
     const inp =
@@ -864,8 +808,8 @@ export default function StudioPlan() {
       <div className="grid gap-5 lg:grid-cols-2">
         <Section icon={Trophy} title="Title CTR test">
           <p className="mb-3 text-xs text-[#6b6b76]">
-            Run two titles/thumbnails, then paste each variant's impressions and clicks from YouTube
-            Studio. This runs a two-proportion z-test and calls a statistically sound winner.
+            Run two titles/thumbnails, then paste each variant&apos;s impressions and clicks from YouTube
+            Studio. This runs a two-proportion z-test and reports a winner only when p &lt; 0.05.
           </p>
           <div className="grid grid-cols-2 gap-3">
             {["a", "b"].map((k) => (
@@ -901,6 +845,12 @@ export default function StudioPlan() {
                   </div>
                 ))}
               </div>
+              {abResult.lowSample && (
+                <div className="rounded-xl bg-[#fff7e8] px-3 py-2 text-xs text-[#8a5b00]">
+                  Sample may be small for a normal-approx z-test (aim for ~1,000+ total impressions
+                  and expected counts ≥ 5 under H₀). Treat early results as directional only.
+                </div>
+              )}
               <div
                 className={
                   "rounded-xl p-3 text-sm " +
@@ -911,17 +861,20 @@ export default function StudioPlan() {
                   <span>Identical CTR so far — keep testing.</span>
                 ) : abResult.sig ? (
                   <span>
-                    <strong>Variant {abResult.winner} wins</strong> at {abResult.conf.toFixed(1)}% confidence
-                    {abResult.lift != null && <> (+{abResult.lift.toFixed(1)}% relative CTR)</>}. Ship it.
+                    <strong>Variant {abResult.winner} wins</strong> (significant at α = {(abResult.alpha * 100).toFixed(0)}%,
+                    p = {abResult.pval.toFixed(4)})
+                    {abResult.lift != null && <> · +{abResult.lift.toFixed(1)}% relative CTR</>}. Ship it.
                   </span>
                 ) : (
                   <span>
-                    Variant {abResult.winner} leads, but at {abResult.conf.toFixed(1)}% confidence it's not
-                    conclusive yet (need &lt;5% p-value). Gather more impressions.
+                    Variant {abResult.winner} leads, but the difference is not significant yet
+                    (p = {abResult.pval.toFixed(4)}; need p &lt; {abResult.alpha}). Gather more impressions.
                   </span>
                 )}
               </div>
-              <p className="sp-mono text-[11px] text-[#a3a3ac]">p-value = {abResult.pval.toFixed(4)}</p>
+              <p className="sp-mono text-[11px] text-[#a3a3ac]">
+                two-proportion z-test · p-value = {abResult.pval.toFixed(4)} · z = {abResult.z.toFixed(3)}
+              </p>
             </div>
           ) : (
             <p className="mt-4 text-sm text-[#a3a3ac]">Enter impressions and clicks for both variants to see the winner.</p>
@@ -939,12 +892,13 @@ export default function StudioPlan() {
               <span className="w-8 text-center">A</span>
               <span className="w-8 text-center">B</span>
             </div>
-            {CRIT.map((c, i) => (
+            {THUMB_CRITERIA.map((c, i) => (
               <div key={i} className="grid grid-cols-[1fr_auto_auto] items-center gap-2 border-t border-[#f0efea] px-3 py-2 text-sm text-[#3a3a44]">
                 <span>{c}</span>
                 {["a", "b"].map((k) => (
                   <button
                     key={k}
+                    type="button"
                     onClick={() =>
                       setThumb((s) => {
                         const next = [...s[k]];
@@ -992,37 +946,21 @@ export default function StudioPlan() {
       setKit((s) => ({ ...s, error: "Add your API key in Settings first." }));
       return;
     }
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
     setKit((s) => ({ ...s, loading: true, error: "", data: null }));
     try {
-      const data = await genToolkit(ask, kit.niche);
+      const data = await genToolkit(makeAsk(ac.signal), kit.niche);
       setKit((s) => ({ ...s, loading: false, data }));
     } catch (e) {
+      if (e?.name === "AbortError") {
+        setKit((s) => ({ ...s, loading: false, error: "Cancelled." }));
+        return;
+      }
       setKit((s) => ({ ...s, loading: false, error: e.message }));
     }
   }
-
-  const DESC_TEMPLATE = `[HOOK — one line that restates the video's promise]
-
-In this video:
-[00:00] Intro
-[00:00] Point one
-[00:00] Point two
-
-🔗 Resources & links:
-- 
-
-📌 Follow / connect:
-- 
-
-#hashtag #hashtag #hashtag`;
-
-  const CTAS = [
-    "If this changed how you think about it, subscribe — the next one goes deeper.",
-    "Comment the one thing you'd want covered next; I read every reply.",
-    "Full breakdown + links are in the description.",
-    "Save this for later — you'll want it when you actually sit down to do it.",
-    "Hit the bell so the follow-up doesn't get lost in your feed.",
-  ];
 
   function renderToolkit() {
     return (
@@ -1036,6 +974,7 @@ In this video:
               className="flex-1 rounded-xl border border-[#e7e6e1] bg-white px-3.5 py-2.5 text-sm outline-none focus:border-[#e5342b] focus:ring-2 focus:ring-[#fdeceb]"
             />
             <button
+              type="button"
               onClick={runKit}
               disabled={kit.loading}
               className="flex items-center justify-center gap-2 rounded-xl bg-[#e5342b] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#c92a22] disabled:opacity-60"
@@ -1049,24 +988,25 @@ In this video:
             <div className="mt-4 space-y-4">
               <div>
                 <p className="mb-2 flex items-center justify-between text-xs font-medium text-[#6b6b76]">
-                  SEO keywords <CopyBtn text={kit.data.seoKeywords.join(", ")} small label="" />
+                  SEO keywords <CopyBtn text={(kit.data.seoKeywords || []).join(", ")} small label="" />
                 </p>
                 <div className="flex flex-wrap gap-1.5">
-                  {kit.data.seoKeywords.map((k, i) => <Chip key={i} tone="indigo">{k}</Chip>)}
+                  {(kit.data.seoKeywords || []).map((k, i) => <Chip key={i} tone="indigo">{k}</Chip>)}
+                  {!kit.data.seoKeywords?.length && <span className="text-xs text-[#8b8b95]">None returned</span>}
                 </div>
               </div>
               <div>
                 <p className="mb-2 flex items-center justify-between text-xs font-medium text-[#6b6b76]">
-                  Hashtags <CopyBtn text={kit.data.hashtags.join(" ")} small label="" />
+                  Hashtags <CopyBtn text={(kit.data.hashtags || []).join(" ")} small label="" />
                 </p>
                 <div className="flex flex-wrap gap-1.5">
-                  {kit.data.hashtags.map((k, i) => <Chip key={i} tone="red">{k}</Chip>)}
+                  {(kit.data.hashtags || []).map((k, i) => <Chip key={i} tone="red">{k}</Chip>)}
                 </div>
               </div>
               <div>
                 <p className="mb-2 text-xs font-medium text-[#6b6b76]">Adjacent videos to make</p>
                 <ul className="space-y-1">
-                  {kit.data.relatedSearches.map((r, i) => (
+                  {(kit.data.relatedSearches || []).map((r, i) => (
                     <li key={i} className="flex items-center gap-2 text-sm text-[#3a3a44]">
                       <Search size={12} className="text-[#a3a3ac]" /> {r}
                     </li>
@@ -1076,7 +1016,7 @@ In this video:
               <div>
                 <p className="mb-2 text-xs font-medium text-[#6b6b76]">Content pillars</p>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  {kit.data.contentPillars.map((p, i) => (
+                  {(kit.data.contentPillars || []).map((p, i) => (
                     <div key={i} className="rounded-xl border border-[#f0efea] p-3">
                       <p className="text-sm font-semibold text-[#17171c]">{p.name}</p>
                       <p className="mt-0.5 text-xs text-[#6b6b76]">{p.description}</p>
@@ -1131,7 +1071,7 @@ In this video:
           </div>
           <p className="mt-3 text-xs text-[#a3a3ac]">
             Consistency beats frequency — pick a cadence you can hold for 90 days, then use the A/B Lab
-            to compound what's working.
+            to compound what&apos;s working.
           </p>
         </Section>
       </div>
@@ -1139,6 +1079,25 @@ In this video:
   }
 
   /* ------------------------------ Settings ------------------------------ */
+  const settingsDialogRef = useRef(null);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") setShowSettings(false);
+    };
+    window.addEventListener("keydown", onKey);
+    // Focus first focusable control
+    const t = setTimeout(() => {
+      const el = settingsDialogRef.current?.querySelector("button, input, select, textarea");
+      el?.focus?.();
+    }, 0);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      clearTimeout(t);
+    };
+  }, [showSettings]);
+
   function renderSettings() {
     const p = PROVIDERS[settings.provider];
     const setProvider = (id) =>
@@ -1153,13 +1112,24 @@ In this video:
     return (
       <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
         <div className="absolute inset-0 bg-black/40" onClick={() => setShowSettings(false)} />
-        <div className="relative z-10 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
+        <div
+          ref={settingsDialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="settings-title"
+          className="relative z-10 max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl"
+        >
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <KeyRound size={16} className="text-[#e5342b]" />
-              <h2 className="sp-display text-lg font-bold">Model &amp; API keys</h2>
+              <h2 id="settings-title" className="sp-display text-lg font-bold">Model &amp; API keys</h2>
             </div>
-            <button onClick={() => setShowSettings(false)} className="rounded-lg p-1.5 text-[#6b6b76] hover:bg-[#f4f4f2]">
+            <button
+              type="button"
+              onClick={() => setShowSettings(false)}
+              className="rounded-lg p-1.5 text-[#6b6b76] hover:bg-[#f4f4f2]"
+              aria-label="Close settings"
+            >
               <X size={18} />
             </button>
           </div>
@@ -1169,6 +1139,7 @@ In this video:
             {Object.entries(PROVIDERS).map(([id, pr]) => (
               <button
                 key={id}
+                type="button"
                 onClick={() => setProvider(id)}
                 className={
                   "rounded-xl border px-2.5 py-2 text-left text-xs font-medium transition " +
@@ -1207,6 +1178,7 @@ In this video:
                 {p.models.map((m) => (
                   <button
                     key={m}
+                    type="button"
                     onClick={() => setSettings((s) => ({ ...s, model: m }))}
                     className={
                       "sp-mono rounded-md border px-2 py-0.5 text-[11px] " +
@@ -1220,6 +1192,9 @@ In this video:
                 ))}
               </div>
             )}
+            <p className="mt-1.5 text-[11px] text-[#8b8b95]">
+              Presets are starting points — model ids change. If a call fails, verify the id in the provider console.
+            </p>
           </div>
 
           <div className="mb-3">
@@ -1237,6 +1212,7 @@ In this video:
               onChange={(e) => setSettings((s) => ({ ...s, keys: { ...s.keys, [s.provider]: e.target.value } }))}
               placeholder={p.keyHint}
               className={inp}
+              autoComplete="off"
             />
           </div>
 
@@ -1248,11 +1224,15 @@ In this video:
 
           <p className="text-[11px] leading-relaxed text-[#8b8b95]">
             Requests go straight from your browser to the provider. Keys are stored only in this
-            browser (localStorage) and never touch any StudioPlan server. If a provider blocks browser
-            calls (CORS), switch to OpenRouter — one key reaches Claude, GPT, Grok and more.
+            browser (localStorage) and never touch any StudioPlan server. Prefer keys with spend
+            limits. <strong>403 / CORS:</strong> Gemini keys often need your site origin allowed under
+            Application restrictions; xAI frequently blocks browser origins — use OpenRouter
+            (<span className="sp-mono">google/gemini-2.5-flash</span>,{" "}
+            <span className="sp-mono">x-ai/grok-4.5</span>) if direct calls fail.
           </p>
 
           <button
+            type="button"
             onClick={() => setShowSettings(false)}
             className="mt-4 w-full rounded-xl bg-[#17171c] py-2.5 text-sm font-semibold text-white hover:bg-black"
           >
@@ -1267,7 +1247,6 @@ In this video:
   return (
     <div className="sp-root min-h-screen bg-[#f6f5f2] text-[#17171c]">
       <div className="mx-auto flex min-h-screen max-w-[1240px]">
-        {/* sidebar */}
         <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r border-[#e7e6e1] bg-white px-3 py-5 md:flex">
           <div className="mb-7 flex items-center gap-2 px-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#e5342b]">
@@ -1282,6 +1261,7 @@ In this video:
             {NAV.map((n) => (
               <button
                 key={n.id}
+                type="button"
                 onClick={() => setTab(n.id)}
                 className={
                   "flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium transition " +
@@ -1298,6 +1278,7 @@ In this video:
             ))}
           </nav>
           <button
+            type="button"
             onClick={() => setShowSettings(true)}
             className="mt-auto flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium text-[#6b6b76] transition hover:bg-[#f4f4f2] hover:text-[#17171c]"
           >
@@ -1312,9 +1293,7 @@ In this video:
           </div>
         </aside>
 
-        {/* main */}
         <main className="min-w-0 flex-1">
-          {/* mobile nav */}
           <div className="sticky top-0 z-10 flex items-center gap-1 overflow-x-auto border-b border-[#e7e6e1] bg-white/90 px-3 py-2 backdrop-blur md:hidden">
             <div className="mr-2 flex items-center gap-1.5">
               <div className="flex h-6 w-6 items-center justify-center rounded bg-[#e5342b]">
@@ -1325,6 +1304,7 @@ In this video:
             {NAV.map((n) => (
               <button
                 key={n.id}
+                type="button"
                 onClick={() => setTab(n.id)}
                 className={
                   "flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium " +
@@ -1335,6 +1315,7 @@ In this video:
               </button>
             ))}
             <button
+              type="button"
               onClick={() => setShowSettings(true)}
               className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-[#6b6b76]"
             >
@@ -1360,6 +1341,7 @@ In this video:
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => setShowSettings(true)}
                 className="flex items-center gap-2 rounded-xl border border-[#e7e6e1] bg-white px-3 py-2 text-xs text-[#3a3a44] transition hover:border-[#c9c8c2]"
               >
@@ -1377,14 +1359,23 @@ In this video:
         </main>
       </div>
 
-      {/* drawer */}
       {drawerVideo && (
         <div className="fixed inset-0 z-30 flex">
           <div className="flex-1 bg-black/30" onClick={() => setDrawerId(null)} />
-          <div className="h-full w-full max-w-2xl overflow-y-auto bg-[#f6f5f2] p-4 shadow-2xl sm:p-6">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Blueprint detail"
+            className="h-full w-full max-w-2xl overflow-y-auto bg-[#f6f5f2] p-4 shadow-2xl sm:p-6"
+          >
             <div className="mb-4 flex items-center justify-between">
               <p className="sp-display text-lg font-bold">Blueprint</p>
-              <button onClick={() => setDrawerId(null)} className="rounded-lg p-1.5 text-[#6b6b76] hover:bg-white">
+              <button
+                type="button"
+                onClick={() => setDrawerId(null)}
+                className="rounded-lg p-1.5 text-[#6b6b76] hover:bg-white"
+                aria-label="Close drawer"
+              >
                 <X size={18} />
               </button>
             </div>
@@ -1394,52 +1385,6 @@ In this video:
       )}
 
       {showSettings && renderSettings()}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Sub-components                                                     */
-/* ------------------------------------------------------------------ */
-
-function TitleCarousel({ titles }) {
-  const [i, setI] = useState(0);
-  if (!titles) return <div className="h-6 w-3/4 animate-pulse rounded bg-white/10" />;
-  const t = titles[i % titles.length];
-  return (
-    <div>
-      <h2 className="sp-display text-lg font-extrabold leading-snug text-white sm:text-xl">{t.text}</h2>
-      <div className="mt-2 flex items-center gap-2">
-        <span className="sp-mono text-[10px] text-white/50">{t.style} · {t.score}/10</span>
-        <div className="flex gap-1">
-          {titles.map((_, k) => (
-            <button
-              key={k}
-              onClick={() => setI(k)}
-              className={"h-1.5 rounded-full transition-all " + (k === i % titles.length ? "w-4 bg-white" : "w-1.5 bg-white/30")}
-            />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Skeleton({ rows = 3 }) {
-  return (
-    <div className="space-y-2">
-      {Array.from({ length: rows }).map((_, i) => (
-        <div key={i} className="h-4 animate-pulse rounded bg-[#f0efea]" style={{ width: `${70 + ((i * 13) % 30)}%` }} />
-      ))}
-    </div>
-  );
-}
-
-function ScriptLoading({ label, active }) {
-  return (
-    <div className="flex items-center gap-2 py-6 text-sm text-[#6b6b76]">
-      <Loader2 size={15} className={"text-[#e5342b] " + (active ? "animate-spin" : "")} />
-      {active ? label : "Queued…"}
     </div>
   );
 }
